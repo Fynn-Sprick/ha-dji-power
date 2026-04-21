@@ -86,8 +86,8 @@ SENSOR_DESCRIPTIONS: tuple[DJIPowerSensorDescription, ...] = (
         name="Remaining Time",
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
-        # The API returns remaining time in seconds
-        native_unit_of_measurement=UnitOfTime.SECONDS,
+        # The API returns remaining time in minutes
+        native_unit_of_measurement=UnitOfTime.MINUTES,
         icon="mdi:timer",
     ),
     DJIPowerSensorDescription(

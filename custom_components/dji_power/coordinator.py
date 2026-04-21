@@ -90,14 +90,13 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                 self.state["online"] = base.get("online_status", False)
                 self.state["device_mode"] = base.get("device_mode")
 
-                # Charging state: MQTT is the authoritative source once
-                # it has connected (_last_mqtt is set on first MQTT push).
-                # Deriving is_charging from charge_type keeps both sensors
-                # consistent. Fall back to REST only on first boot.
+                # Charging state: prefer MQTT once it has connected.
+                # charge_type is often absent from the MQTT payload on this
+                # firmware, so fall back to power_in > 5 W as a reliable proxy.
                 if "_last_mqtt" in self.state:
-                    self.state["is_charging"] = (
-                        self.state.get("charge_type", 0) != 0
-                    )
+                    charge_type = self.state.get("charge_type", 0) or 0
+                    power_in = self.state.get("power_in", 0) or 0
+                    self.state["is_charging"] = (charge_type != 0) or (power_in > 5)
                 else:
                     # No MQTT data yet — bootstrap from REST
                     self.state["is_charging"] = bool(base.get("is_charging", False))
@@ -204,7 +203,7 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
 
             remain = battery.get("remain_time")
             if remain is not None:
-                update["remain_time"] = remain  # seconds (as returned by the API)
+                update["remain_time"] = remain  # minutes (as returned by the API)
 
             temp = battery.get("temp")
             if temp is not None:
