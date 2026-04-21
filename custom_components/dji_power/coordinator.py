@@ -216,6 +216,12 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                 # This firmware always sends charge_type=0 in the MQTT payload
                 # even when actively charging (confirmed at 600+ W input).
 
+        output_enable = host.get("output_power_enable", {})
+        if output_enable:
+            ac_val = output_enable.get("ac")
+            if ac_val is not None:
+                update["ac_output_enabled"] = bool(ac_val)
+
         if power_info:
             update["power_in"] = power_info.get("input", 0)   # W
             update["power_out"] = power_info.get("output", 0)  # W

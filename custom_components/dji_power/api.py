@@ -55,6 +55,27 @@ class DJIPowerAPI:
             "x-request-start": str(int(time.time() * 1000)),
         }
 
+    async def _post(self, path: str, body: dict) -> dict[str, Any]:
+        url = self._base_url + path
+        try:
+            async with self._session.post(
+                url, headers=self._headers(), json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                data = await r.json(content_type=None)
+        except aiohttp.ClientError as exc:
+            raise DJIAPIError(f"Network error: {exc}") from exc
+
+        result = data.get("result", {})
+        code = result.get("code", -1)
+        if code == 121011:
+            raise DJIAuthError("Invalid token type — token is a web token, not a mobile token")
+        if code in (121001, 401):
+            raise DJIAuthError("Token expired or invalid")
+        if code != 0:
+            raise DJIAPIError(f"API error code={code}: {result.get('message', '')}")
+        return data.get("data", {})
+
     async def _get(self, path: str) -> dict[str, Any]:
         url = self._base_url + path
         try:
@@ -90,3 +111,15 @@ class DJIPowerAPI:
     async def get_mqtt_credentials(self) -> dict[str, Any]:
         """Return fresh MQTT credentials."""
         return await self._get(MQTT_TOKEN_PATH)
+
+    async def set_ac_output(self, sn: str, enabled: bool) -> None:
+        """Enable or disable AC output on the device."""
+        await self._post(
+            f"/app/api/v1/devices/{sn}/thing/property/set",
+            {
+                "sn": sn,
+                "properties": {
+                    "output_power_enable": {"ac": 1 if enabled else 0},
+                },
+            },
+        )
