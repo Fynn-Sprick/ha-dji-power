@@ -204,7 +204,7 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
 
             remain = battery.get("remain_time")
             if remain is not None:
-                update["remain_time"] = remain  # minutes (as returned by the API)
+                update["remain_time"] = remain  # seconds (as returned by the API)
 
             temp = battery.get("temp")
             if temp is not None:
@@ -218,6 +218,13 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         if power_info:
             update["power_in"] = power_info.get("input", 0)   # W
             update["power_out"] = power_info.get("output", 0)  # W
+
+        # Fallback: if the device sends power_in but charge_type is absent from
+        # this firmware's MQTT payload, derive is_charging from the power value.
+        # A threshold of 5 W avoids false positives from idle draw.
+        if "is_charging" not in update:
+            power_in = update.get("power_in", 0) or 0
+            update["is_charging"] = power_in > 5
 
         return update
 
