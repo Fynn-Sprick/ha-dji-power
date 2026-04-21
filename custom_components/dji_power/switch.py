@@ -71,15 +71,24 @@ class DJIPowerACSwitch(CoordinatorEntity[DJIPowerCoordinator], SwitchEntity):
         return power_out > 5
 
     async def _set_ac(self, enabled: bool) -> None:
-        """Send AC output command via REST, falling back to MQTT publish."""
+        """Send AC output command via REST, falling back to MQTT publish.
+
+        NOTE: Cloud-level AC output control has not yet been confirmed working
+        for this firmware.  REST calls return 404 and MQTT commands published
+        to the forward/ topic are silently ignored by the broker ACL.
+        The command is attempted anyway; the actual state will be reflected by
+        the next MQTT telemetry push (~1 s) without optimistic pre-update.
+        """
         try:
             await self.coordinator.api.set_ac_output(self._sn, enabled)
+            # REST succeeded — update optimistically
+            self.coordinator.state["ac_output_enabled"] = enabled
+            self.async_write_ha_state()
         except Exception:
-            # REST not available — try MQTT publish as fallback
+            # REST not available — try MQTT publish as best-effort fallback.
+            # Do NOT update state optimistically; let MQTT telemetry reflect
+            # the real device state so the switch doesn't flicker.
             self.coordinator.publish_ac_output(enabled)
-
-        self.coordinator.state["ac_output_enabled"] = enabled
-        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable AC output (sw=0)."""

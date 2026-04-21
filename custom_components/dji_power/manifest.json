@@ -1,7 +1,7 @@
 {
   "domain": "dji_power",
   "name": "DJI Power Station",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "documentation": "https://github.com/fynnsprick/ha-dji-power",
   "issue_tracker": "https://github.com/fynnsprick/ha-dji-power/issues",
   "requirements": ["paho-mqtt>=1.6.1"],
