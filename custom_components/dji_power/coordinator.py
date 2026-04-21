@@ -212,18 +212,18 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
             charge_type = battery.get("charge_type")
             if charge_type is not None:
                 update["charge_type"] = charge_type
-                update["is_charging"] = charge_type != 0
+                # NOTE: do NOT derive is_charging from charge_type here.
+                # This firmware always sends charge_type=0 in the MQTT payload
+                # even when actively charging (confirmed at 600+ W input).
 
         if power_info:
             update["power_in"] = power_info.get("input", 0)   # W
             update["power_out"] = power_info.get("output", 0)  # W
 
-        # Fallback: if the device sends power_in but charge_type is absent from
-        # this firmware's MQTT payload, derive is_charging from the power value.
+        # Always derive is_charging from power_in — charge_type is unreliable
+        # on this firmware (stays 0 even when charging at full speed).
         # A threshold of 5 W avoids false positives from idle draw.
-        if "is_charging" not in update:
-            power_in = update.get("power_in", 0) or 0
-            update["is_charging"] = power_in > 5
+        update["is_charging"] = (update.get("power_in", 0) or 0) > 5
 
         return update
 
