@@ -1,7 +1,7 @@
 # DJI Power Station — Home Assistant Integration
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/v/release/fynnsprick/ha-dji-power)](https://github.com/fynnsprick/ha-dji-power/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/fynn-sprick/ha-dji-power)](https://github.com/fynn-sprick/ha-dji-power/releases)
 
 Integrates **DJI Power Stations** into Home Assistant via the DJI Home cloud API and MQTT — with live push updates (~1 second latency) and full Energy Dashboard support.
 
