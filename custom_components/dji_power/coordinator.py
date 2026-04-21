@@ -216,11 +216,16 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                 # This firmware always sends charge_type=0 in the MQTT payload
                 # even when actively charging (confirmed at 600+ W input).
 
-        output_enable = host.get("output_power_enable", {})
-        if output_enable:
-            ac_val = output_enable.get("ac")
-            if ac_val is not None:
-                update["ac_output_enabled"] = bool(ac_val)
+        # AC output state from power_info.interfaces (group_type=2)
+        # sw=0 means ON (normal operation), sw=1 means manually OFF
+        interfaces = host.get("power_info", {}).get("interfaces", [])
+        for iface in interfaces:
+            if iface.get("group_type") == 2:  # group_type 2 = AC output
+                for item in iface.get("list", []):
+                    sw = item.get("sw")
+                    if sw is not None:
+                        update["ac_output_enabled"] = (sw == 0)  # 0=ON, 1=OFF
+                break
 
         if power_info:
             update["power_in"] = power_info.get("input", 0)   # W
@@ -293,6 +298,28 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
             )
         except Exception as exc:
             _LOGGER.error("Failed to refresh MQTT token for %s: %s", self.sn, exc)
+
+    def publish_ac_output(self, enabled: bool) -> None:
+        """Publish AC output command via MQTT (sw=0=ON, sw=1=OFF).
+
+        Called as a fallback when the REST API returns 404.
+        Whether the device honours this is firmware-dependent.
+        """
+        if not self._mqtt_client:
+            return
+        import uuid as _uuid
+        sw = 0 if enabled else 1
+        topic = f"forward/dy/thing/product/{self.sn}/services"
+        payload = json.dumps({
+            "tid": str(_uuid.uuid4()),
+            "bid": str(_uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "app_id": "dy301",
+            "method": "output_switch",
+            "data": {"group_type": 2, "sw": sw},
+        })
+        self._mqtt_client.publish(topic, payload, qos=1)
+        _LOGGER.debug("Published AC output command (sw=%d) to %s", sw, topic)
 
     async def async_stop_mqtt(self) -> None:
         """Stop MQTT client."""

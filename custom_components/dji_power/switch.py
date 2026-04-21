@@ -57,33 +57,34 @@ class DJIPowerACSwitch(CoordinatorEntity[DJIPowerCoordinator], SwitchEntity):
     def is_on(self) -> bool | None:
         """Return True if AC output is enabled.
 
-        Priority:
-        1. Explicit flag from MQTT payload (output_power_enable.ac)
-        2. Fallback: power_out > 5 W means something is drawing power
+        Sourced from power_info.interfaces[group_type=2].sw via MQTT:
+          sw=0 → AC output ON (normal operation)
+          sw=1 → AC output OFF (manually disabled)
+        Falls back to power_out > 5 W if the field is not yet received.
         """
         state = self.coordinator.data or {}
         val = state.get("ac_output_enabled")
         if val is not None:
             return bool(val)
-        # Fallback heuristic — not perfectly accurate but better than None
+        # Fallback: infer from output power
         power_out = state.get("power_out", 0) or 0
         return power_out > 5
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Enable AC output."""
+    async def _set_ac(self, enabled: bool) -> None:
+        """Send AC output command via REST, falling back to MQTT publish."""
         try:
-            await self.coordinator.api.set_ac_output(self._sn, True)
-            # Optimistically update state so UI responds immediately
-            self.coordinator.state["ac_output_enabled"] = True
-            self.async_write_ha_state()
-        except Exception as exc:
-            _LOGGER.error("Failed to enable AC output for %s: %s", self._sn, exc)
+            await self.coordinator.api.set_ac_output(self._sn, enabled)
+        except Exception:
+            # REST not available — try MQTT publish as fallback
+            self.coordinator.publish_ac_output(enabled)
+
+        self.coordinator.state["ac_output_enabled"] = enabled
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable AC output (sw=0)."""
+        await self._set_ac(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Disable AC output."""
-        try:
-            await self.coordinator.api.set_ac_output(self._sn, False)
-            self.coordinator.state["ac_output_enabled"] = False
-            self.async_write_ha_state()
-        except Exception as exc:
-            _LOGGER.error("Failed to disable AC output for %s: %s", self._sn, exc)
+        """Disable AC output (sw=1)."""
+        await self._set_ac(False)

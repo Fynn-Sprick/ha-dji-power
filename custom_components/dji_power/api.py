@@ -113,13 +113,24 @@ class DJIPowerAPI:
         return await self._get(MQTT_TOKEN_PATH)
 
     async def set_ac_output(self, sn: str, enabled: bool) -> None:
-        """Enable or disable AC output on the device."""
-        await self._post(
-            f"/app/api/v1/devices/{sn}/thing/property/set",
-            {
-                "sn": sn,
-                "properties": {
-                    "output_power_enable": {"ac": 1 if enabled else 0},
+        """Enable or disable AC output on the device.
+
+        NOTE: The correct cloud control endpoint for this device has not yet
+        been confirmed by traffic analysis.  This method attempts a REST call
+        that may return 404; the coordinator falls back to an MQTT publish.
+        Raise DJIAPIError on definitive failure so the caller can log it.
+        """
+        # sw=0 means ON, sw=1 means OFF (confirmed from MQTT telemetry)
+        sw = 0 if enabled else 1
+        try:
+            await self._post(
+                f"/app/api/v1/devices/{sn}/thing/services",
+                {
+                    "sn": sn,
+                    "method": "output_switch",
+                    "data": {"group_type": 2, "sw": sw},
                 },
-            },
-        )
+            )
+        except DJIAPIError:
+            # REST endpoint not found — caller will try MQTT fallback
+            raise
