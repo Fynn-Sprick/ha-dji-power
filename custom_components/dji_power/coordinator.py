@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import ssl
 import threading
 import time
 from datetime import timedelta
@@ -12,6 +11,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DJIPowerAPI, DJIAuthError, DJIAPIError
@@ -76,7 +76,11 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         try:
             devices = await self.api.get_devices()
         except DJIAuthError as exc:
-            raise UpdateFailed(f"Auth error: {exc}") from exc
+            # Raise ConfigEntryAuthFailed so HA shows the re-auth notification
+            # and stops hammering the API with bad credentials.
+            raise ConfigEntryAuthFailed(
+                f"DJI token expired — please re-enter your x-member-token: {exc}"
+            ) from exc
         except DJIAPIError as exc:
             raise UpdateFailed(f"API error: {exc}") from exc
 
@@ -86,7 +90,7 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                 # Always update fields that are authoritative in REST
                 self.state.setdefault("sn", self.sn)
                 self.state["name"] = base.get("name", self.device_name)
-                self.state["soc"] = base.get("battery", 0) / 100  # → %
+                self.state["soc"] = base.get("battery", 0) / 100  # centipercent → %
                 self.state["online"] = base.get("online_status", False)
                 self.state["device_mode"] = base.get("device_mode")
 
@@ -94,9 +98,8 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                 # charge_type is often absent from the MQTT payload on this
                 # firmware, so fall back to power_in > 5 W as a reliable proxy.
                 if "_last_mqtt" in self.state:
-                    charge_type = self.state.get("charge_type", 0) or 0
                     power_in = self.state.get("power_in", 0) or 0
-                    self.state["is_charging"] = (charge_type != 0) or (power_in > 5)
+                    self.state["is_charging"] = power_in > 5
                 else:
                     # No MQTT data yet — bootstrap from REST
                     self.state["is_charging"] = bool(base.get("is_charging", False))
@@ -120,44 +123,67 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         creds = await self.api.get_mqtt_credentials()
         self._mqtt_token = creds["user_token"]
         self._mqtt_user_uuid = creds["user_uuid"]
-        self._mqtt_token_expires_at = time.time() + creds.get("expire", 3600) - MQTT_TOKEN_REFRESH_MARGIN
+        expire = creds.get("expire", 3600)
+        self._mqtt_token_expires_at = time.time() + expire - MQTT_TOKEN_REFRESH_MARGIN
         client_id = creds["client_id"]
 
         _LOGGER.debug("Starting MQTT for %s (client_id=%s)", self.sn, client_id)
 
         self._mqtt_running = True
-        self._mqtt_client = mqtt.Client(
+        self._start_mqtt_client(client_id, self._mqtt_user_uuid, self._mqtt_token)
+
+        # Schedule periodic token refresh using async_create_task (correct
+        # way to schedule a coroutine from within the HA event loop).
+        self._schedule_mqtt_token_refresh(expire - MQTT_TOKEN_REFRESH_MARGIN)
+
+    def _start_mqtt_client(self, client_id: str, user_uuid: str, token: str) -> None:
+        """Create a fresh paho client and start the background loop thread."""
+        # Stop existing client/thread if any
+        if self._mqtt_client:
+            try:
+                self._mqtt_client.disconnect()
+                self._mqtt_client.loop_stop()
+            except Exception:
+                pass
+            self._mqtt_client = None
+
+        client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
             protocol=mqtt.MQTTv5,
         )
-        self._mqtt_client.username_pw_set(
-            username=self._mqtt_user_uuid,
-            password=self._mqtt_token,
-        )
-        self._mqtt_client.tls_set()
-        self._mqtt_client.on_connect = self._on_connect
-        self._mqtt_client.on_message = self._on_message
-        self._mqtt_client.on_disconnect = self._on_disconnect
+        client.username_pw_set(username=user_uuid, password=token)
+        client.tls_set()
+        client.on_connect = self._on_connect
+        client.on_message = self._on_message
+        client.on_disconnect = self._on_disconnect
+        self._mqtt_client = client
 
         self._mqtt_thread = threading.Thread(
             target=self._mqtt_loop, daemon=True, name=f"dji_mqtt_{self.sn}"
         )
         self._mqtt_thread.start()
 
-        # Schedule periodic token refresh
-        self.hass.loop.call_later(
-            self._mqtt_token_expires_at - time.time(),
-            lambda: asyncio.run_coroutine_threadsafe(
-                self._async_refresh_mqtt_token(), self.hass.loop
-            ),
-        )
+    def _schedule_mqtt_token_refresh(self, delay_seconds: float) -> None:
+        """Schedule _async_refresh_mqtt_token to run after delay_seconds.
+
+        Uses call_later + async_create_task — the correct pattern for
+        scheduling a coroutine from the HA event loop without involving
+        run_coroutine_threadsafe (which is only for cross-thread calls).
+        """
+        def _fire():
+            self.hass.async_create_task(
+                self._async_refresh_mqtt_token(),
+                name=f"dji_mqtt_refresh_{self.sn}",
+            )
+
+        self.hass.loop.call_later(max(delay_seconds, 60), _fire)
 
     def _mqtt_loop(self) -> None:
         """Run MQTT in background thread."""
         try:
             self._mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
-            self._mqtt_client.loop_forever()
+            self._mqtt_client.loop_forever(retry_first_connection=True)
         except Exception as exc:
             _LOGGER.warning("MQTT loop error for %s: %s", self.sn, exc)
 
@@ -188,7 +214,10 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
 
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties) -> None:
         if self._mqtt_running:
-            _LOGGER.warning("MQTT disconnected for %s (rc=%s), reconnecting...", self.sn, reason_code)
+            _LOGGER.warning(
+                "MQTT disconnected for %s (rc=%s) — paho will retry automatically",
+                self.sn, reason_code,
+            )
 
     def _parse_osd_to_dict(self, host: dict) -> dict:
         """Parse device_osd host block; returns a partial state dict (thread-safe, no mutation)."""
@@ -199,15 +228,15 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         if battery:
             charge_pct = battery.get("charge_pct")
             if charge_pct is not None:
-                update["soc"] = charge_pct / 100  # → %
+                update["soc"] = charge_pct / 100  # centipercent → %
 
             remain = battery.get("remain_time")
             if remain is not None:
-                update["remain_time"] = remain  # minutes (as returned by the API)
+                update["remain_time"] = remain  # seconds
 
             temp = battery.get("temp")
             if temp is not None:
-                update["temperature"] = temp / 100  # → °C
+                update["temperature"] = temp / 100  # centi-°C → °C
 
             charge_type = battery.get("charge_type")
             if charge_type is not None:
@@ -278,32 +307,36 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         try:
             creds = await self.api.get_mqtt_credentials()
             new_token = creds["user_token"]
+            new_client_id = creds["client_id"]
             expire = creds.get("expire", 3600)
             _LOGGER.debug("Refreshed MQTT token for %s (expires in %ds)", self.sn, expire)
 
-            # Reconnect with new credentials
-            if self._mqtt_client:
-                self._mqtt_client.username_pw_set(
-                    username=self._mqtt_user_uuid,
-                    password=new_token,
-                )
-                self._mqtt_client.reconnect()
+            # Replace the MQTT client entirely so new credentials take effect
+            # cleanly (avoids race conditions with loop_forever + reconnect).
+            self._mqtt_user_uuid = creds["user_uuid"]
+            self._mqtt_token = new_token
+            self._start_mqtt_client(new_client_id, self._mqtt_user_uuid, new_token)
 
             self._mqtt_token_expires_at = time.time() + expire - MQTT_TOKEN_REFRESH_MARGIN
-            self.hass.loop.call_later(
-                expire - MQTT_TOKEN_REFRESH_MARGIN,
-                lambda: asyncio.run_coroutine_threadsafe(
-                    self._async_refresh_mqtt_token(), self.hass.loop
-                ),
+            self._schedule_mqtt_token_refresh(expire - MQTT_TOKEN_REFRESH_MARGIN)
+
+        except DJIAuthError as exc:
+            _LOGGER.error(
+                "MQTT token refresh failed for %s — member token expired: %s. "
+                "Re-authenticate in HA Settings → Integrations.",
+                self.sn, exc,
             )
         except Exception as exc:
-            _LOGGER.error("Failed to refresh MQTT token for %s: %s", self.sn, exc)
+            # Transient error — retry in 5 minutes
+            _LOGGER.warning("MQTT token refresh failed for %s: %s — retrying in 5 min", self.sn, exc)
+            self._schedule_mqtt_token_refresh(300)
 
     def publish_ac_output(self, enabled: bool) -> None:
         """Publish AC output command via MQTT (sw=0=ON, sw=1=OFF).
 
         Called as a fallback when the REST API returns 404.
-        Whether the device honours this is firmware-dependent.
+        Whether the device honours this is firmware-dependent — current testing
+        shows the broker ACL blocks user-client publishes to the forward/ topic.
         """
         if not self._mqtt_client:
             return

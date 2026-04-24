@@ -25,5 +25,12 @@
     "abort": {
       "already_configured": "This device is already configured."
     }
+  },
+  "options": {},
+  "issues": {
+    "reauth": {
+      "title": "Re-authenticate DJI Power Station",
+      "description": "Your DJI token has expired. Please re-enter your x-member-token."
+    }
   }
 }

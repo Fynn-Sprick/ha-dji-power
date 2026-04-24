@@ -4,11 +4,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_TOKEN
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -20,12 +18,6 @@ _LOGGER = logging.getLogger(__name__)
 STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_MEMBER_TOKEN): vol.All(str, vol.Length(min=20)),
-    }
-)
-
-STEP_DEVICE_SCHEMA_TEMPLATE = lambda choices: vol.Schema(
-    {
-        vol.Required(CONF_SN): vol.In(choices),
     }
 )
 
@@ -115,5 +107,56 @@ class DJIPowerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_MEMBER_TOKEN: self._member_token,
                 CONF_SN: sn,
                 CONF_DEVICE_NAME: name,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Re-authentication flow
+    # Triggered automatically by HA when ConfigEntryAuthFailed is raised.
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Start re-auth — immediately go to the confirm step."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Re-auth step: ask the user for a fresh x-member-token."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            token = user_input[CONF_MEMBER_TOKEN].strip()
+            session = async_get_clientsession(self.hass)
+            api = DJIPowerAPI(token, session)
+
+            try:
+                devices = await api.get_devices()
+            except DJIAuthError:
+                errors["base"] = "invalid_auth"
+            except DJIAPIError as exc:
+                _LOGGER.exception("API error during re-auth: %s", exc)
+                errors["base"] = "cannot_connect"
+            except Exception as exc:
+                _LOGGER.exception("Unexpected error during re-auth: %s", exc)
+                errors["base"] = "unknown"
+            else:
+                if not devices:
+                    errors["base"] = "no_devices"
+                else:
+                    # Update the existing entry's token and reload
+                    return self.async_update_reload_and_abort(
+                        self._get_reauth_entry(),
+                        data_updates={CONF_MEMBER_TOKEN: token},
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=STEP_USER_SCHEMA,
+            errors=errors,
+            description_placeholders={
+                "help_url": "https://github.com/fynnsprick/ha-dji-power#getting-your-token"
             },
         )
