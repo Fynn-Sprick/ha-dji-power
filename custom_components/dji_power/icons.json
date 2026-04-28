@@ -1,0 +1,62 @@
+{
+  "entity": {
+    "sensor": {
+      "soc": {
+        "default": "mdi:battery-medium"
+      },
+      "power_in": {
+        "default": "mdi:transmission-tower-import"
+      },
+      "power_out": {
+        "default": "mdi:transmission-tower-export"
+      },
+      "temperature": {
+        "default": "mdi:thermometer"
+      },
+      "remain_time": {
+        "default": "mdi:timer-outline"
+      },
+      "charge_type": {
+        "default": "mdi:power-plug-outline",
+        "state": {
+          "not_charging": "mdi:power-plug-off-outline",
+          "ac": "mdi:power-plug",
+          "solar": "mdi:solar-power",
+          "car": "mdi:car-electric",
+          "dc": "mdi:cable-data"
+        }
+      },
+      "energy_in": {
+        "default": "mdi:battery-arrow-up-outline"
+      },
+      "energy_out": {
+        "default": "mdi:battery-arrow-down-outline"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "default": "mdi:lan-disconnect",
+        "state": {
+          "on": "mdi:lan-connect",
+          "off": "mdi:lan-disconnect"
+        }
+      },
+      "is_charging": {
+        "default": "mdi:battery-outline",
+        "state": {
+          "on": "mdi:battery-charging",
+          "off": "mdi:battery-outline"
+        }
+      }
+    },
+    "switch": {
+      "ac_output": {
+        "default": "mdi:power-socket-eu",
+        "state": {
+          "on": "mdi:power-socket-eu",
+          "off": "mdi:power-socket-off"
+        }
+      }
+    }
+  }
+}
