@@ -326,6 +326,7 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
                     update["charge_limit"] = (
                         charge_limit / 100 if charge_limit > 100 else charge_limit
                     )
+                    update["_charge_limit_assumed"] = False
                     break
 
         # AC output state: sw=0 = ON, sw=1 = OFF
@@ -401,16 +402,16 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         self._mqtt_client.publish(topic, payload, qos=1)
         _LOGGER.debug("Published AC output command (sw=%d) to %s", sw, topic)
 
-    def publish_charge_limit(self, limit: int) -> None:
+    def publish_charge_limit(self, limit: int) -> bool:
         """Publish a maximum recharge level command via MQTT."""
-        self._publish_service(
+        return self._publish_service(
             "set_charge_limit", {"charge_limit": limit * 100}
         )
 
-    def _publish_service(self, method: str, data: dict[str, Any]) -> None:
+    def _publish_service(self, method: str, data: dict[str, Any]) -> bool:
         """Publish a best-effort device service command."""
         if not self._mqtt_client:
-            return
+            return False
         import uuid as _uuid
         topic = f"forward/dy/thing/product/{self.sn}/services"
         payload = json.dumps({
@@ -421,8 +422,15 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
             "method": method,
             "data": data,
         })
-        self._mqtt_client.publish(topic, payload, qos=1)
+        result = self._mqtt_client.publish(topic, payload, qos=1)
         _LOGGER.debug("Published %s command to %s", method, topic)
+        return result.rc == mqtt.MQTT_ERR_SUCCESS
+
+    def set_assumed_charge_limit(self, limit: int) -> None:
+        """Expose a requested limit until telemetry confirms the device value."""
+        self.state["charge_limit"] = limit
+        self.state["_charge_limit_assumed"] = True
+        self.async_set_updated_data(dict(self.state))
 
     # ------------------------------------------------------------------
     # Teardown

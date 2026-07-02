@@ -5,6 +5,7 @@ from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -64,13 +65,25 @@ class DJIPowerChargeLimitNumber(
         value = (self.coordinator.data or {}).get("charge_limit")
         return float(value) if value is not None else None
 
+    @property
+    def assumed_state(self) -> bool:
+        """Indicate that DJI telemetry has not confirmed the new value yet."""
+        return bool(
+            (self.coordinator.data or {}).get("_charge_limit_assumed", False)
+        )
+
     async def async_set_native_value(self, value: float) -> None:
         """Set the maximum recharge level."""
         limit = int(value)
         try:
             await self.coordinator.api.set_charge_limit(self._sn, limit)
         except Exception:
-            self.coordinator.publish_charge_limit(limit)
-        else:
-            self.coordinator.state["charge_limit"] = limit
-            self.coordinator.async_set_updated_data(self.coordinator.state)
+            if not self.coordinator.publish_charge_limit(limit):
+                raise HomeAssistantError(
+                    "Charge limit could not be sent because MQTT is disconnected"
+                )
+
+        # DJI's service response does not contain the resulting device state.
+        # Show the requested value immediately; the next OSD packet replaces it
+        # with the value actually reported by the power station.
+        self.coordinator.set_assumed_charge_limit(limit)
