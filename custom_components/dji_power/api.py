@@ -134,3 +134,16 @@ class DJIPowerAPI:
         except DJIAPIError:
             # REST endpoint not found — caller will try MQTT fallback
             raise
+
+    async def set_charge_limit(self, sn: str, limit: int) -> None:
+        """Set the maximum battery recharge level in percent."""
+        await self._post(
+            f"/app/api/v1/devices/{sn}/thing/services",
+            {
+                "sn": sn,
+                "method": "set_charge_limit",
+                # Battery percentages in the device protocol use
+                # centipercent (e.g. 80% == 8000).
+                "data": {"charge_limit": limit * 100},
+            },
+        )

@@ -31,6 +31,7 @@ Please open an issue if you have a different model — feedback welcome.
 | Charge Source | Sensor | `not_charging` / `ac` / `solar` / `car` / `dc` |
 | Online | Binary Sensor | Whether device is reachable |
 | Charging | Binary Sensor | Whether device is currently charging |
+| Charge Limit | Number | Maximum battery recharge level (50–100%) |
 
 Updates arrive via **MQTT push** (~1 s latency). REST polling every 60 s as fallback.
 

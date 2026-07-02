@@ -57,6 +57,11 @@
           "off": "mdi:power-socket-off"
         }
       }
+    },
+    "number": {
+      "charge_limit": {
+        "default": "mdi:battery-lock"
+      }
     }
   }
 }

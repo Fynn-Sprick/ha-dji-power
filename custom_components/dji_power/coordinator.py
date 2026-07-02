@@ -316,6 +316,18 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
             if charge_type is not None:
                 update["charge_type"] = charge_type
 
+            # Firmware versions have used different names for this setting.
+            # Values are normally centipercent, but accepting plain percent
+            # keeps the entity compatible with older payloads.
+            for key in ("charge_limit", "recharge_limit", "max_charge_soc"):
+                charge_limit = battery.get(key)
+                if charge_limit is not None:
+                    charge_limit = float(charge_limit)
+                    update["charge_limit"] = (
+                        charge_limit / 100 if charge_limit > 100 else charge_limit
+                    )
+                    break
+
         # AC output state: sw=0 = ON, sw=1 = OFF
         interfaces = host.get("power_info", {}).get("interfaces", [])
         for iface in interfaces:
@@ -388,6 +400,29 @@ class DJIPowerCoordinator(DataUpdateCoordinator):
         })
         self._mqtt_client.publish(topic, payload, qos=1)
         _LOGGER.debug("Published AC output command (sw=%d) to %s", sw, topic)
+
+    def publish_charge_limit(self, limit: int) -> None:
+        """Publish a maximum recharge level command via MQTT."""
+        self._publish_service(
+            "set_charge_limit", {"charge_limit": limit * 100}
+        )
+
+    def _publish_service(self, method: str, data: dict[str, Any]) -> None:
+        """Publish a best-effort device service command."""
+        if not self._mqtt_client:
+            return
+        import uuid as _uuid
+        topic = f"forward/dy/thing/product/{self.sn}/services"
+        payload = json.dumps({
+            "tid": str(_uuid.uuid4()),
+            "bid": str(_uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "app_id": "dy301",
+            "method": method,
+            "data": data,
+        })
+        self._mqtt_client.publish(topic, payload, qos=1)
+        _LOGGER.debug("Published %s command to %s", method, topic)
 
     # ------------------------------------------------------------------
     # Teardown
